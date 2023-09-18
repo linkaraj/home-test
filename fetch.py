@@ -5,7 +5,7 @@ import sys
 
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.request import urlopen, urlretrieve
 
 #
 # WebPage class to fetch and save web pages
@@ -18,9 +18,7 @@ class WebPage:
     # Fetch the web page and store the content and object
     #
     def fetch(self):
-        url_with_schema = self.url
-        if not urlparse(self.url).scheme:
-            url_with_schema = 'http://' + self.url
+        url_with_schema = self.get_url_with_schema()
         try:
             response = urlopen(url_with_schema)
             self.web_content = response.read().decode('UTF-8')
@@ -29,10 +27,16 @@ class WebPage:
 
         metadata = {}
         metadata['fetch_date'] = response.info()['date']
-        soup = BeautifulSoup(self.web_content, 'html.parser')
-        metadata['links_count'] = len(soup.find_all('a'))
-        metadata['images_count'] = len(soup.findAll('img'))
+        self.soup = BeautifulSoup(self.web_content, 'html.parser')
+        metadata['links_count'] = len(self.soup.find_all('a'))
+        metadata['images_count'] = len(self.soup.find_all('img'))
         self.metadata = metadata
+
+    #
+    # Add http schema if not provided
+    #
+    def get_url_with_schema(self):
+        return 'http://' + self.url if not urlparse(self.url).scheme else self.url
 
     #
     # Sanitize the URL then construct the html file name
@@ -73,7 +77,7 @@ class WebPage:
     def save_html(self):
         html_file_name = self.html_file_name()
         with open(html_file_name, "w") as html_file:
-            html_file.write(self.web_content)
+            html_file.write(str(self.soup))
 
     #
     # Save metadata file locally
@@ -83,7 +87,40 @@ class WebPage:
         with open(metadata_file_name, "w") as html_file:
             html_file.write(json.dumps(self.metadata, indent=4))
 
-def fetch_web_pages(web_urls, metadata):
+
+    #
+    # Download all images from web page
+    #
+    def save_all_images(self):
+        folder_name = self.html_file_name() + '.folder'
+        if not os.path.exists(folder_name):
+            os.makedirs(folder_name)
+        i = 1
+        for img in self.soup.find_all('img'):
+            if hasattr(img, 'src'):
+                image_src = img['src']
+                if image_src.startswith('http'):
+                    pass
+                elif image_src.startswith('/'):
+                    image_src = self.base_url(self.get_url_with_schema(), False) + image_src
+                    print(image_src)
+                else:
+                    image_src = self.base_url(self.get_url_with_schema(), True) + image_src
+
+                urlretrieve(image_src, folder_name + '/' + str(i) + '.jpg')
+                img['src'] = folder_name + '/' + str(i) + '.jpg'
+                i = i + 1
+
+    def base_url(self, url, relative=False):
+        parsed = urlparse(url)        
+        path   = '/'.join(parsed.path.split('/')[:-1]) if relative else ''
+        parsed = parsed._replace(path=path)
+        parsed = parsed._replace(params='')
+        parsed = parsed._replace(query='')
+        parsed = parsed._replace(fragment='')
+        return parsed.geturl()
+
+def fetch_web_pages(web_urls, metadata, deep):
     for web_url in web_urls:
         web_page = WebPage(web_url)
         try:
@@ -108,11 +145,16 @@ def fetch_web_pages(web_urls, metadata):
             #
             # Save html and metadata into disk
             #
+            if deep:
+                try:
+                    web_page.save_all_images()
+                except:
+                    print('Failed to save all images for URL : ' + web_url)
             web_page.save_html()
             web_page.save_metadata()
             
         except Exception as error:
-            print("Unable to fetch URL : " + web_url)
+            print('Unable to fetch URL : ' + web_url)
 
 def main():
     #
@@ -120,10 +162,11 @@ def main():
     #
     parser = argparse.ArgumentParser('Fetch webpages and saves them do disk')
     parser.add_argument('--metadata', default=False, action='store_true', help='Print metadata information about the web url\'s')
+    parser.add_argument('--deep', default=False, action='store_true', help='Download all the images from the web url\'s')
     parser.add_argument('web_urls', metavar='WEB-URL', nargs='+', help='Collection of web url\'s to fetch')
 
     args = parser.parse_args()
-    fetch_web_pages(args.web_urls, args.metadata)
+    fetch_web_pages(args.web_urls, args.metadata, args.deep)
 
 if __name__ == "__main__":
     rv = main()
